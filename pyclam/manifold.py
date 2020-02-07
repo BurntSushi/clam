@@ -550,6 +550,107 @@ class Graph:
         return visited
 
 
+class Distance:
+    """ Wrapper around distance calls that also does caching.
+    This DOES NOT do any batching.
+    The metric given should have the following properties:
+        * dist(p1, p2) = 0 if and only if p1 = p2.
+        * dist(p1, p2) = dist(p2, p1)
+    """
+    # TODO: Think if anything needs to change to make this into a distributed cache among clusters rather than a central cache in manifold.
+
+    def __init__(self, data: Data, metric: Metric):
+        self.data: Data = data
+        self.metric: Metric = metric
+
+        # TODO: Turn history into memmap? or some other more efficient form? We need O(1) indexing and O(1) check to see if the already value exists
+        # self.history: np.ndarray = np.empty(shape=((self.data.shape[0] - 1) * (self.data.shape[0]) // 2, ), dtype=np.float64)
+        # self.history[:] = np.nan
+        # self.history[0] = 0
+        self.history: Dict[int, np.float64] = {0: np.float64(0)}
+        return
+
+    def __call__(self, x1: Union[int, List[int], np.ndarray], x2: Union[int, List[int], np.ndarray]) -> np.ndarray:
+        """ Returns the pairwise distances between all points in x1 and x2.
+        :param x1: if x1 is an int or list of ints, the points are loaded from self.data
+                   if x1 is a numpy array, it is treated as raw data.
+        :param x2: if x2 is an int or list of ints, the points are loaded from self.data
+                   if x2 is a numpy array, it is treated as raw data.
+        :return: matrix of pairwise distances.
+        """
+        def check_types(x):
+            if type(x) is np.ndarray:
+                if len(x.shape) == 1:
+                    x = np.expand_dims(x, 0)
+            else:
+                if not ((type(x) is int) or ((type(x) is list) and (len(x) > 0) and (type(x[0]) is int))):
+                    raise AssertionError(f'arguments must be single integers or non-empty lists of integers. got {type(x), x}')
+            return x
+
+        x1 = check_types(x1)
+        x2 = check_types(x2)
+
+        if type(x1) is not np.ndarray and type(x2) is not np.ndarray:
+            return self._from_history(x1, x2)
+        else:
+            if type(x1) is np.ndarray:
+                x2 = self._load(x2)
+            else:
+                x1 = self._load(x1)
+            return np.squeeze(cdist(x1, x2, self.metric))
+
+    @property
+    def _num_points(self) -> int:
+        return int(self.data.shape[0])
+
+    def _load(self, i: Union[int, List[int]]) -> np.ndarray:
+        return [self.data[i]] if (type(i) is int) else self.data[i]
+
+    def _get_key(self, i: int, j: int):
+        if (i >= self._num_points) or (j >= self._num_points):
+            raise IndexError(f'index out of bounds: {i if i >= self._num_points else j}')
+
+        if i == j:
+            return 0
+        else:
+            # deal with negative indexes
+            i = i % self._num_points if i < 0 else i
+            j = j % self._num_points if j < 0 else j
+
+            # require i > j. We only consider the lower triangle of the full pairwise distance matrix of points in data
+            i, j = (j, i) if i < j else (i, j)
+            return ((i - 1) * i // 2) + j + 1
+
+    def _from_history(self, i: Union[int, List[int]], j: Union[int, List[int]]) -> np.ndarray:
+        """ Recalls cached results from past distance calculations. If a distance calculation was not found, it is computed and cached.
+        The signature variations are as follows:
+            * [i: int, j: int] -> np.float64
+            * [i: int, j: List[int]] -> np.array of np.float64 with shape (len(j), )
+            * [i: List[int], j: int] -> np.array of np.float64 with shape (len(i), )
+            * [i: List[int], j: List[int]] -> np.array of np.float64 with shape (len(i), len(j))
+        :param i: index or list of indexes of point(s) in data.
+        :param j: index or list of indexes of point(s) in data.
+        :return: matrix of pairwise distances between points in i and j
+        """
+        i = [i] if type(i) is int else i
+        j = [j] if type(j) is int else j
+
+        arg_keys = list(map(list, {frozenset((i_, j_)) for j_ in j for i_ in i if j_ != i_}))
+        new_keys = {self._get_key(*k): k for k in arg_keys}
+        new_keys = {k: v for k, v in new_keys.items() if k not in self.history}
+        new_keys = [(k, v) for k, v in new_keys.items()]
+
+        new_pairs = [self._load(v) for _, v in new_keys]
+        # TODO: call cdist on rows of the matrix
+        # noinspection PyTypeChecker
+        self.history.update({k: cdist([v0], [v1], metric=self.metric)[0][0] for (k, _), (v0, v1) in zip(new_keys, new_pairs)})
+
+        arg_distances = [self._get_key(i_, j_) for j_ in j for i_ in i]
+        distances = np.asarray([self.history[k] for k in arg_distances])
+        distances = np.reshape(distances, newshape=(len(i), len(j)))
+        return distances[0] if (len(i) == 1 or len(j) == 1) else distances
+
+
 class Manifold:
     """ Manifold of varying resolution.
 
