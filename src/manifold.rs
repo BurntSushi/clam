@@ -12,8 +12,8 @@ pub struct Manifold {
 }
 
 impl Manifold {
-    pub fn new(data: Box<Data>, metric: Metric, criteria: Vec<impl Criterion>) -> Manifold {
-        let d = Dataset { data, metric };
+    pub fn new(data: Data, metric: Metric, criteria: Vec<impl Criterion>) -> Manifold {
+        let d = Dataset::new(data, metric);
         let d = Rc::new(d);
         Manifold {
             data: Rc::clone(&d),
@@ -34,7 +34,7 @@ mod tests {
     fn new() {
         let data = vec![1, 2, 3];
         let metric = String::from("euclidean");
-        let m = Manifold::new(Box::new(data), metric, vec![MinPoints::new(2)]);
+        let m = Manifold::new(data, metric, vec![MinPoints::new(2)]);
         assert_eq!(m.cluster_count(), 3);
         assert_ne!(m.root, None);
     }
