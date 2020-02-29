@@ -25,11 +25,13 @@ impl Dataset {
     // }
 
     fn key(&self, i: Index, j: Index) -> Index {
-        if i == j { 0 as Index } else if i < j { self.key(j, i) } else { (i * (i - 1) / 2 + j + 1) as Index }
+        if i == j { 0 }
+        else if i < j { (j * (j - 1) / 2 + i + 1) }
+        else { (i * (i - 1) / 2 + j + 1) }
     }
 
     fn ij(&self, k: Index) -> (Index, Index) {
-        let i: Index = (1 + ((1 + 8 * k) as f64).sqrt() as Index) / 2;
+        let i: Index = ((1. + (1. + 8. * k as f64).sqrt()) / 2.).ceil() as Index - 1;
         let j: Index = k - 1 - i * (i - 1) / 2;
         (i, j)
     }
